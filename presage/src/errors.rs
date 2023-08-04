@@ -1,7 +1,7 @@
 use std::borrow::Cow;
 
 use libsignal_service::{
-    models::ParseContactError, prelude::protocol::SignalProtocolError, ParseServiceAddressError,
+    models::ParseContactError, protocol::SignalProtocolError, ParseServiceAddressError,
 };
 
 use crate::store::StoreError;

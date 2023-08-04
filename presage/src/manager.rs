@@ -22,9 +22,9 @@ use libsignal_service::{
     models::Contact,
     prelude::{
         phonenumber::PhoneNumber,
-        protocol::{KeyPair, PrivateKey, PublicKey, SenderCertificate},
         Content, ProfileKey, PushService, Uuid,
     },
+    protocol::{KeyPair, PrivateKey, PublicKey, SenderCertificate},
     proto::{
         data_message::Delete, sync_message, AttachmentPointer, Envelope, GroupContextV2,
         NullMessage,

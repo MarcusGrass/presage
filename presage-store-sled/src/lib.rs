@@ -14,14 +14,15 @@ use presage::libsignal_service::{
     groups_v2::Group,
     models::Contact,
     prelude::{
-        protocol::{
-            Context, Direction, GenericSignedPreKey, IdentityKey, IdentityKeyPair,
-            IdentityKeyStore, KyberPreKeyId, KyberPreKeyRecord, KyberPreKeyStore, PreKeyId,
-            PreKeyRecord, PreKeyStore, ProtocolAddress, ProtocolStore, SenderKeyRecord,
-            SenderKeyStore, SessionRecord, SessionStore, SessionStoreExt, SignalProtocolError,
-            SignedPreKeyId, SignedPreKeyRecord, SignedPreKeyStore,
-        },
+
         Content, ProfileKey, Uuid,
+    },
+    protocol::{
+        Context, Direction, GenericSignedPreKey, IdentityKey, IdentityKeyPair,
+        IdentityKeyStore, KyberPreKeyId, KyberPreKeyRecord, KyberPreKeyStore, PreKeyId,
+        PreKeyRecord, PreKeyStore, ProtocolAddress, ProtocolStore, SenderKeyRecord,
+        SenderKeyStore, SessionRecord, SessionStore, SignalProtocolError,
+        SignedPreKeyId, SignedPreKeyRecord, SignedPreKeyStore,
     },
     push_service::DEFAULT_DEVICE_ID,
     Profile, ServiceAddress,
@@ -38,6 +39,7 @@ mod error;
 mod protobuf;
 
 pub use error::SledStoreError;
+use presage::libsignal_service::session_store::SessionStoreExt;
 
 const SLED_TREE_CONTACTS: &str = "contacts";
 const SLED_TREE_GROUPS: &str = "groups";

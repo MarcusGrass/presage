@@ -6,12 +6,13 @@ use libsignal_service::{
     groups_v2::Group,
     models::Contact,
     prelude::{
-        protocol::{ProtocolStore, SenderKeyStore, SessionStoreExt},
         Content, ProfileKey, Uuid, UuidError,
     },
+    protocol::{ProtocolStore, SenderKeyStore},
     proto::{sync_message::Sent, DataMessage, GroupContextV2, SyncMessage},
     Profile,
 };
+use libsignal_service::session_store::SessionStoreExt;
 use serde::{Deserialize, Serialize};
 
 pub trait StoreError: std::error::Error + Sync + Send + 'static {}
