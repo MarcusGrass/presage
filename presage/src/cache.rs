@@ -1,10 +1,10 @@
 use std::cell::Cell;
 
-pub(crate) struct CacheCell<T: Clone> {
+pub(crate) struct CacheCell<T: Clone + Send + Sync> {
     cell: Cell<Option<T>>,
 }
 
-impl<T: Clone> Clone for CacheCell<T> {
+impl<T: Clone + Send + Sync> Clone for CacheCell<T> {
     fn clone(&self) -> Self {
         let value = self.cell.replace(None);
         self.cell.set(value.clone());
@@ -14,7 +14,7 @@ impl<T: Clone> Clone for CacheCell<T> {
     }
 }
 
-impl<T: Clone> Default for CacheCell<T> {
+impl<T: Clone + Send + Sync> Default for CacheCell<T> {
     fn default() -> Self {
         Self {
             cell: Cell::new(None),
@@ -22,7 +22,7 @@ impl<T: Clone> Default for CacheCell<T> {
     }
 }
 
-impl<T: Clone> CacheCell<T> {
+impl<T: Clone + Send + Sync> CacheCell<T> {
     pub fn get<E>(&self, factory: impl FnOnce() -> Result<T, E>) -> Result<T, E> {
         let value = match self.cell.replace(None) {
             Some(value) => value,

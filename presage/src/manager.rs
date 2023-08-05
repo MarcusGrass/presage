@@ -20,15 +20,12 @@ use libsignal_service::{
     groups_v2::{decrypt_group, Group, GroupsManager, InMemoryCredentialsCache},
     messagepipe::ServiceCredentials,
     models::Contact,
-    prelude::{
-        phonenumber::PhoneNumber,
-        Content, ProfileKey, PushService, Uuid,
-    },
-    protocol::{KeyPair, PrivateKey, PublicKey, SenderCertificate},
+    prelude::{phonenumber::PhoneNumber, Content, ProfileKey, PushService, Uuid},
     proto::{
         data_message::Delete, sync_message, AttachmentPointer, Envelope, GroupContextV2,
         NullMessage,
     },
+    protocol::{KeyPair, PrivateKey, PublicKey, SenderCertificate},
     provisioning::{
         generate_registration_id, LinkingManager, ProvisioningManager, SecondaryDeviceProvisioning,
         VerificationCodeResponse,
@@ -49,7 +46,7 @@ use libsignal_service::{
 };
 use libsignal_service_hyper::push_service::HyperPushService;
 
-use crate::{cache::CacheCell, serde::serde_profile_key, Thread};
+use crate::{serde::serde_profile_key, Thread};
 use crate::{store::Store, Error};
 
 type ServiceCipher<C> = cipher::ServiceCipher<C, StdRng>;
@@ -94,7 +91,7 @@ pub struct Confirmation {
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Registered {
     #[serde(skip)]
-    push_service_cache: CacheCell<HyperPushService>,
+    push_service_cache: Arc<Mutex<Option<HyperPushService>>>,
     #[serde(skip)]
     identified_websocket: Arc<Mutex<Option<SignalWebSocket>>>,
     #[serde(skip)]
@@ -319,7 +316,7 @@ impl<C: Store> Manager<C, Linking> {
                 {
                     log::info!("successfully registered device {}", &service_ids);
                     Ok(Registered {
-                        push_service_cache: CacheCell::default(),
+                        push_service_cache: Arc::new(Mutex::default()),
                         identified_websocket: Default::default(),
                         unidentified_websocket: Default::default(),
                         unidentified_sender_certificate: Default::default(),
@@ -461,7 +458,7 @@ impl<C: Store> Manager<C, Confirmation> {
             rng,
             config_store: self.config_store,
             state: Registered {
-                push_service_cache: CacheCell::default(),
+                push_service_cache: Arc::new(Mutex::default()),
                 identified_websocket: Default::default(),
                 unidentified_websocket: Default::default(),
                 unidentified_sender_certificate: Default::default(),
@@ -1063,7 +1060,14 @@ impl<C: Store> Manager<C, Registered> {
         let mut sender = self.new_message_sender().await?;
 
         let mut groups_manager = self.groups_manager()?;
-        let Some(group) = upsert_group(&self.config_store, &mut groups_manager, master_key_bytes, &0).await? else {
+        let Some(group) = upsert_group(
+            &self.config_store,
+            &mut groups_manager,
+            master_key_bytes,
+            &0,
+        )
+        .await?
+        else {
             return Err(Error::UnknownGroup);
         };
 
@@ -1164,16 +1168,20 @@ impl<C: Store> Manager<C, Registered> {
     ///
     /// If no service is yet cached, it will create and cache one.
     fn push_service(&self) -> Result<HyperPushService, Error<C::Error>> {
-        self.state.push_service_cache.get(|| {
-            let credentials = self.credentials()?;
-            let service_configuration: ServiceConfiguration = self.state.signal_servers.into();
+        let mut guard = self.state.push_service_cache.lock();
+        if let Some(val) = guard.as_ref() {
+            return Ok(val.clone());
+        }
+        let credentials = self.credentials()?;
+        let service_configuration: ServiceConfiguration = self.state.signal_servers.into();
 
-            Ok(HyperPushService::new(
-                service_configuration,
-                credentials,
-                crate::USER_AGENT.to_string(),
-            ))
-        })
+        let svc = HyperPushService::new(
+            service_configuration,
+            credentials,
+            crate::USER_AGENT.to_string(),
+        );
+        *guard = Some(svc.clone());
+        Ok(svc)
     }
 
     /// Creates a new message sender.

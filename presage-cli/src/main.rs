@@ -126,7 +126,7 @@ enum Cmd {
         group(
             ArgGroup::new("list-messages")
                 .required(true)
-                .args(&["recipient-uuid", "group-master-key"])
+                .args(&["recipient_uuid", "group_master_key"])
         )
     )]
     ListMessages {
@@ -188,7 +188,7 @@ async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
 
     let db_path = args.db_path.unwrap_or_else(|| {
-        ProjectDirs::from("org", "whisperfish", "presage")
+        ProjectDirs::from("com", "marcusgrass", "tiny-msg")
             .unwrap()
             .config_dir()
             .into()
@@ -318,7 +318,10 @@ fn print_message<C: Store>(
                 return None;
             };
 
-            let ContentBody::DataMessage(DataMessage { body: Some(body), .. }) = message.body else {
+            let ContentBody::DataMessage(DataMessage {
+                body: Some(body), ..
+            }) = message.body
+            else {
                 log::warn!("message reacted to has no body");
                 return None;
             };

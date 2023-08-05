@@ -1,18 +1,16 @@
 use std::{fmt, ops::RangeBounds};
 
 use crate::{manager::Registered, GroupMasterKeyBytes};
+use libsignal_service::session_store::SessionStoreExt;
 use libsignal_service::{
     content::ContentBody,
     groups_v2::Group,
     models::Contact,
-    prelude::{
-        Content, ProfileKey, Uuid, UuidError,
-    },
-    protocol::{ProtocolStore, SenderKeyStore},
+    prelude::{Content, ProfileKey, Uuid, UuidError},
     proto::{sync_message::Sent, DataMessage, GroupContextV2, SyncMessage},
+    protocol::{ProtocolStore, SenderKeyStore},
     Profile,
 };
-use libsignal_service::session_store::SessionStoreExt;
 use serde::{Deserialize, Serialize};
 
 pub trait StoreError: std::error::Error + Sync + Send + 'static {}

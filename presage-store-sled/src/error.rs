@@ -1,5 +1,5 @@
-use presage::{StoreError};
 use presage::libsignal_service::protocol::SignalProtocolError;
+use presage::StoreError;
 
 #[derive(Debug, thiserror::Error)]
 pub enum SledStoreError {
