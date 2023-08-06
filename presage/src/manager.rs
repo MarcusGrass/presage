@@ -12,6 +12,7 @@ use rand::{distributions::Alphanumeric, rngs::StdRng, Rng, RngCore, SeedableRng}
 use serde::{Deserialize, Serialize};
 use url::Url;
 
+use libsignal_service::push_service::{RegistrationMethod, VerificationTransport};
 use libsignal_service::{
     attachment_cipher::decrypt_in_place,
     cipher,
@@ -28,7 +29,6 @@ use libsignal_service::{
     protocol::{KeyPair, PrivateKey, PublicKey, SenderCertificate},
     provisioning::{
         generate_registration_id, LinkingManager, ProvisioningManager, SecondaryDeviceProvisioning,
-        VerificationCodeResponse,
     },
     push_service::{
         AccountAttributes, DeviceCapabilities, DeviceId, ServiceError, ServiceIds, WhoAmIResponse,
@@ -46,6 +46,7 @@ use libsignal_service::{
 };
 use libsignal_service_hyper::push_service::HyperPushService;
 
+use crate::cache::CacheCell;
 use crate::{serde::serde_profile_key, Thread};
 use crate::{store::Store, Error};
 
@@ -91,7 +92,7 @@ pub struct Confirmation {
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Registered {
     #[serde(skip)]
-    push_service_cache: Arc<Mutex<Option<HyperPushService>>>,
+    push_service_cache: CacheCell<HyperPushService>,
     #[serde(skip)]
     identified_websocket: Arc<Mutex<Option<SignalWebSocket>>>,
     #[serde(skip)]
@@ -195,25 +196,8 @@ impl<C: Store> Manager<C, Registration> {
         let password: String = (&mut rng).sample_iter(&Alphanumeric).take(24).collect();
 
         let service_configuration: ServiceConfiguration = signal_servers.into();
-        let mut push_service =
+        let mut _push_service =
             HyperPushService::new(service_configuration, None, crate::USER_AGENT.to_string());
-
-        let mut provisioning_manager: ProvisioningManager<HyperPushService> =
-            ProvisioningManager::new(&mut push_service, phone_number.clone(), password.clone());
-
-        let verification_code_response = if use_voice_call {
-            provisioning_manager
-                .request_voice_verification_code(captcha, None)
-                .await?
-        } else {
-            provisioning_manager
-                .request_sms_verification_code(captcha, None)
-                .await?
-        };
-
-        if let VerificationCodeResponse::CaptchaRequired = verification_code_response {
-            return Err(Error::CaptchaRequired);
-        }
 
         let manager = Manager {
             config_store,
@@ -316,7 +300,7 @@ impl<C: Store> Manager<C, Linking> {
                 {
                     log::info!("successfully registered device {}", &service_ids);
                     Ok(Registered {
-                        push_service_cache: Arc::new(Mutex::default()),
+                        push_service_cache: CacheCell::default(),
                         identified_websocket: Default::default(),
                         unidentified_websocket: Default::default(),
                         unidentified_sender_certificate: Default::default(),
@@ -421,6 +405,7 @@ impl<C: Store> Manager<C, Confirmation> {
 
         let profile_key = ProfileKey::generate(profile_key);
 
+        /*
         let registered = provisioning_manager
             .confirm_verification_code(
                 confirm_code,
@@ -446,6 +431,8 @@ impl<C: Store> Manager<C, Confirmation> {
             )
             .await?;
 
+         */
+
         let aci_identity_key_pair = KeyPair::generate(&mut rng);
         let pni_identity_key_pair = KeyPair::generate(&mut rng);
 
@@ -453,12 +440,14 @@ impl<C: Store> Manager<C, Confirmation> {
         let password = self.state.password.clone();
 
         trace!("confirmed! (and registered)");
+        panic!("Oh no");
 
+        /*
         let mut manager = Manager {
             rng,
             config_store: self.config_store,
             state: Registered {
-                push_service_cache: Arc::new(Mutex::default()),
+                push_service_cache: CacheCell::default(),
                 identified_websocket: Default::default(),
                 unidentified_websocket: Default::default(),
                 unidentified_sender_certificate: Default::default(),
@@ -491,6 +480,8 @@ impl<C: Store> Manager<C, Confirmation> {
         } else {
             Ok(manager)
         }
+
+         */
     }
 }
 
@@ -1168,20 +1159,16 @@ impl<C: Store> Manager<C, Registered> {
     ///
     /// If no service is yet cached, it will create and cache one.
     fn push_service(&self) -> Result<HyperPushService, Error<C::Error>> {
-        let mut guard = self.state.push_service_cache.lock();
-        if let Some(val) = guard.as_ref() {
-            return Ok(val.clone());
-        }
-        let credentials = self.credentials()?;
-        let service_configuration: ServiceConfiguration = self.state.signal_servers.into();
+        self.state.push_service_cache.get(|| {
+            let credentials = self.credentials()?;
+            let service_configuration: ServiceConfiguration = self.state.signal_servers.into();
 
-        let svc = HyperPushService::new(
-            service_configuration,
-            credentials,
-            crate::USER_AGENT.to_string(),
-        );
-        *guard = Some(svc.clone());
-        Ok(svc)
+            Ok(HyperPushService::new(
+                service_configuration,
+                credentials,
+                crate::USER_AGENT.to_string(),
+            ))
+        })
     }
 
     /// Creates a new message sender.
