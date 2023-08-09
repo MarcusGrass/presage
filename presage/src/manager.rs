@@ -12,7 +12,9 @@ use rand::{distributions::Alphanumeric, rngs::StdRng, Rng, RngCore, SeedableRng}
 use serde::{Deserialize, Serialize};
 use url::Url;
 
-use libsignal_service::push_service::{RegistrationMethod, VerificationTransport};
+use libsignal_service::push_service::{
+    RegistrationMethod, RegistrationSessionMetadataResponse, VerificationTransport,
+};
 use libsignal_service::{
     attachment_cipher::decrypt_in_place,
     cipher,
@@ -87,6 +89,7 @@ pub struct Confirmation {
     signal_servers: SignalServers,
     phone_number: PhoneNumber,
     password: String,
+    reg: RegistrationSessionMetadataResponse,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -196,8 +199,42 @@ impl<C: Store> Manager<C, Registration> {
         let password: String = (&mut rng).sample_iter(&Alphanumeric).take(24).collect();
 
         let service_configuration: ServiceConfiguration = signal_servers.into();
-        let mut _push_service =
+        let mut push_service =
             HyperPushService::new(service_configuration, None, crate::USER_AGENT.to_string());
+
+        let pnr = phone_number.to_string();
+        let sess = push_service
+            .create_verification_session(&pnr, None, None, None)
+            .await
+            .unwrap();
+        let registration = if !sess.allowed_to_request_code {
+            if sess.requested_information.len() == 1 {
+                let c = sess.requested_information.first().unwrap();
+                if c == "captcha" {
+                    let patch = push_service
+                        .patch_verification_session(&sess.id, None, None, None, captcha, None)
+                        .await;
+                    println!("Got patch response {patch:?}");
+                    patch.unwrap()
+                } else {
+                    panic!("Wanted other information than captcha {sess:?}")
+                }
+            } else {
+                panic!("Session not allowed to send request code {sess:?}")
+            }
+        } else {
+            sess
+        };
+        let registration = if registration.allowed_to_request_code
+            && registration.next_sms.is_some()
+        {
+            push_service
+                .request_verification_code(&registration.id, "android", VerificationTransport::Sms)
+                .await
+                .unwrap()
+        } else {
+            panic!("Registration failed {registration:?}");
+        };
 
         let manager = Manager {
             config_store,
@@ -205,6 +242,7 @@ impl<C: Store> Manager<C, Registration> {
                 signal_servers,
                 phone_number,
                 password,
+                reg: registration,
             },
             rng,
         };
@@ -386,14 +424,6 @@ impl<C: Store> Manager<C, Confirmation> {
             Some(credentials),
             crate::USER_AGENT.to_string(),
         );
-
-        let mut provisioning_manager: ProvisioningManager<HyperPushService> =
-            ProvisioningManager::new(
-                &mut push_service,
-                self.state.phone_number.clone(),
-                self.state.password.to_string(),
-            );
-
         let mut rng = StdRng::from_entropy();
 
         // generate a 52 bytes signaling key
@@ -404,84 +434,82 @@ impl<C: Store> Manager<C, Confirmation> {
         rng.fill_bytes(&mut profile_key);
 
         let profile_key = ProfileKey::generate(profile_key);
+        let metadata = push_service
+            .submit_verification_code(&self.state.reg.id, confirm_code.as_ref())
+            .await
+            .unwrap();
+        if metadata.verified {
+            let aci_identity_key_pair = KeyPair::generate(&mut rng);
+            let pni_identity_key_pair = KeyPair::generate(&mut rng);
 
-        /*
-        let registered = provisioning_manager
-            .confirm_verification_code(
-                confirm_code,
-                AccountAttributes {
-                    name: None,
-                    signaling_key: Some(signaling_key.to_vec()),
-                    registration_id,
-                    pni_registration_id,
-                    voice: false,
-                    video: false,
-                    fetches_messages: true,
-                    pin: None,
-                    registration_lock: None,
-                    unidentified_access_key: Some(profile_key.derive_access_key().to_vec()),
-                    unrestricted_unidentified_access: false, // TODO: make this configurable?
-                    discoverable_by_phone_number: true,
-                    capabilities: DeviceCapabilities {
-                        gv2: true,
-                        gv1_migration: true,
-                        ..Default::default()
+            let phone_number = self.state.phone_number.clone();
+            let password = self.state.password.clone();
+
+            let registered = push_service
+                .submit_registration_request(
+                    RegistrationMethod::SessionId(&metadata.id),
+                    AccountAttributes {
+                        name: None,
+                        signaling_key: Some(signaling_key.to_vec()),
+                        registration_id,
+                        pni_registration_id,
+                        voice: false,
+                        video: false,
+                        fetches_messages: true,
+                        pin: None,
+                        registration_lock: None,
+                        unidentified_access_key: Some(profile_key.derive_access_key().to_vec()),
+                        unrestricted_unidentified_access: false, // TODO: make this configurable?
+                        discoverable_by_phone_number: true,
+                        capabilities: DeviceCapabilities {
+                            gv2: true,
+                            gv1_migration: true,
+                            ..Default::default()
+                        },
                     },
+                    false,
+                )
+                .await
+                .unwrap();
+            let mut manager = Manager {
+                rng,
+                config_store: self.config_store,
+                state: Registered {
+                    push_service_cache: CacheCell::default(),
+                    identified_websocket: Default::default(),
+                    unidentified_websocket: Default::default(),
+                    unidentified_sender_certificate: Default::default(),
+                    signal_servers: self.state.signal_servers,
+                    device_name: None,
+                    phone_number,
+                    service_ids: ServiceIds {
+                        aci: registered.uuid,
+                        pni: registered.pni,
+                    },
+                    password,
+                    signaling_key,
+                    device_id: None,
+                    registration_id,
+                    pni_registration_id: Some(pni_registration_id),
+                    aci_private_key: aci_identity_key_pair.private_key,
+                    aci_public_key: aci_identity_key_pair.public_key,
+                    pni_private_key: Some(pni_identity_key_pair.private_key),
+                    pni_public_key: Some(pni_identity_key_pair.public_key),
+                    profile_key,
                 },
-            )
-            .await?;
+            };
+            manager.config_store.save_state(&manager.state)?;
 
-         */
-
-        let aci_identity_key_pair = KeyPair::generate(&mut rng);
-        let pni_identity_key_pair = KeyPair::generate(&mut rng);
-
-        let phone_number = self.state.phone_number.clone();
-        let password = self.state.password.clone();
-
-        trace!("confirmed! (and registered)");
-        panic!("Oh no");
-
-        /*
-        let mut manager = Manager {
-            rng,
-            config_store: self.config_store,
-            state: Registered {
-                push_service_cache: CacheCell::default(),
-                identified_websocket: Default::default(),
-                unidentified_websocket: Default::default(),
-                unidentified_sender_certificate: Default::default(),
-                signal_servers: self.state.signal_servers,
-                device_name: None,
-                phone_number,
-                service_ids: ServiceIds {
-                    aci: registered.uuid,
-                    pni: registered.pni,
-                },
-                password,
-                signaling_key,
-                device_id: None,
-                registration_id,
-                pni_registration_id: Some(pni_registration_id),
-                aci_private_key: aci_identity_key_pair.private_key,
-                aci_public_key: aci_identity_key_pair.public_key,
-                pni_private_key: Some(pni_identity_key_pair.private_key),
-                pni_public_key: Some(pni_identity_key_pair.public_key),
-                profile_key,
-            },
-        };
-
-        manager.config_store.save_state(&manager.state)?;
-
-        if let Err(e) = manager.register_pre_keys().await {
-            // clear the entire store on any error, there's no possible recovery here
-            manager.config_store.clear_registration()?;
-            Err(e)
+            if let Err(e) = manager.register_pre_keys().await {
+                // clear the entire store on any error, there's no possible recovery here
+                manager.config_store.clear_registration()?;
+                Err(e)
+            } else {
+                Ok(manager)
+            }
         } else {
-            Ok(manager)
+            panic!("Failed to verify!");
         }
-
-         */
     }
 }
 
