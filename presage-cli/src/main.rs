@@ -188,7 +188,7 @@ async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
 
     let db_path = args.db_path.unwrap_or_else(|| {
-        ProjectDirs::from("com", "marcusgrass", "tiny-msg")
+        ProjectDirs::from("org", "whisperfish", "presage")
             .unwrap()
             .config_dir()
             .into()

@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use url::Url;
 
 use libsignal_service::push_service::{
-    RegistrationMethod, RegistrationSessionMetadataResponse, VerificationTransport,
+    RegistrationMethod, VerificationTransport,
 };
 use libsignal_service::{
     attachment_cipher::decrypt_in_place,
@@ -30,7 +30,7 @@ use libsignal_service::{
     },
     protocol::{KeyPair, PrivateKey, PublicKey, SenderCertificate},
     provisioning::{
-        generate_registration_id, LinkingManager, ProvisioningManager, SecondaryDeviceProvisioning,
+        generate_registration_id, LinkingManager, SecondaryDeviceProvisioning,
     },
     push_service::{
         AccountAttributes, DeviceCapabilities, DeviceId, ServiceError, ServiceIds, WhoAmIResponse,
@@ -89,7 +89,7 @@ pub struct Confirmation {
     signal_servers: SignalServers,
     phone_number: PhoneNumber,
     password: String,
-    reg: RegistrationSessionMetadataResponse,
+    session_id: String,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -202,39 +202,35 @@ impl<C: Store> Manager<C, Registration> {
         let mut push_service =
             HyperPushService::new(service_configuration, None, crate::USER_AGENT.to_string());
 
-        let pnr = phone_number.to_string();
-        let sess = push_service
-            .create_verification_session(&pnr, None, None, None)
-            .await
-            .unwrap();
-        let registration = if !sess.allowed_to_request_code {
-            if sess.requested_information.len() == 1 {
-                let c = sess.requested_information.first().unwrap();
-                if c == "captcha" {
-                    let patch = push_service
-                        .patch_verification_session(&sess.id, None, None, None, captcha, None)
-                        .await;
-                    println!("Got patch response {patch:?}");
-                    patch.unwrap()
-                } else {
-                    panic!("Wanted other information than captcha {sess:?}")
+        let phone_number_string = phone_number.to_string();
+        let mut session = push_service
+            .create_verification_session(&phone_number_string, None, None, None)
+            .await?;
+
+        if !session.verified {
+            if !session.allowed_to_request_code {
+                if session.captcha_required() {
+                    session = push_service
+                        .patch_verification_session(&session.id, None, None, None, captcha, None)
+                        .await?
                 }
-            } else {
-                panic!("Session not allowed to send request code {sess:?}")
+                if session.push_challenge_required() {
+                    panic!("Can't push")
+                }
             }
-        } else {
-            sess
-        };
-        let registration = if registration.allowed_to_request_code
-            && registration.next_sms.is_some()
-        {
-            push_service
-                .request_verification_code(&registration.id, "android", VerificationTransport::Sms)
-                .await
-                .unwrap()
-        } else {
-            panic!("Registration failed {registration:?}");
-        };
+        }
+
+        if !session.allowed_to_request_code {
+            panic!("Not allowed to request code")
+        }
+
+        session = push_service
+            .request_verification_code(&session.id, crate::USER_AGENT, if use_voice_call {
+                VerificationTransport::Voice
+            } else {
+                VerificationTransport::Sms
+            })
+            .await?;
 
         let manager = Manager {
             config_store,
@@ -242,7 +238,7 @@ impl<C: Store> Manager<C, Registration> {
                 signal_servers,
                 phone_number,
                 password,
-                reg: registration,
+                session_id: session.id,
             },
             rng,
         };
@@ -435,7 +431,7 @@ impl<C: Store> Manager<C, Confirmation> {
 
         let profile_key = ProfileKey::generate(profile_key);
         let metadata = push_service
-            .submit_verification_code(&self.state.reg.id, confirm_code.as_ref())
+            .submit_verification_code(&self.state.session_id, confirm_code.as_ref())
             .await
             .unwrap();
         if metadata.verified {
